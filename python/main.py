@@ -56,8 +56,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Procedural voxel world")
     p.add_argument("--seed",          type=int, default=42,
                    help="World generation seed")
-    p.add_argument("--view-distance", type=int, default=6,
-                   help="Chunk view distance (default: 6)")
+    p.add_argument("--view-distance", type=int, default=32,
+                   help="Chunk view distance (default: 32)")
     p.add_argument("--threads",       type=int, default=max(1, (os.cpu_count() or 8) - 1),
                    help="Background worker thread count")
     p.add_argument("--headless",      action="store_true",
