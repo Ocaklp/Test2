@@ -175,8 +175,9 @@ void main() {
         float distZ = abs(vWorldPos.z - uCameraPos.z);
         
         // Small 0.5 buffer prevents Z-fighting at the boundary
-        if (max(distX, distZ) < uRenderDistance - 0.5) {
-            discard; 
+        float dist = length(vec2(vWorldPos.x - uCameraPos.x, vWorldPos.z - uCameraPos.z));
+        if (dist < uRenderDistance - 0.5) {
+            discard;
         }
     }
 

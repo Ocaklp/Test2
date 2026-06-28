@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
+#include <pybind11/stl_bind.h> // NEW: For opaque vectors
 
 #include "noise.hpp"
 #include "voxel.hpp"
@@ -14,8 +15,13 @@
 namespace py = pybind11;
 using namespace voxel;
 
+// NEW: Tell Pybind11 NOT to deep-copy this vector into a Python list
+PYBIND11_MAKE_OPAQUE(std::vector<RenderableMesh>);
+
 PYBIND11_MODULE(voxel_core, m) {
     m.doc() = "Procedural voxel world engine — C++ core exposed via Pybind11";
+    // NEW: Bind the vector as a native Python collection (Zero copy)
+    py::bind_vector<std::vector<RenderableMesh>>(m, "RenderableMeshList");
     // Bind the RenderableMesh struct
     py::class_<RenderableMesh>(m, "RenderableMesh")
         .def_readonly("cx", &RenderableMesh::cx)
@@ -23,8 +29,14 @@ PYBIND11_MODULE(voxel_core, m) {
         .def_readonly("cz", &RenderableMesh::cz)
         .def_readonly("lod_level", &RenderableMesh::lod_level)
         // Expose vertices as a property so Python can read the array
-        .def_property_readonly("vertices", [](const RenderableMesh& rm) {
-            return rm.vertices; 
+        .def_property_readonly("vertices", [](py::handle obj) {
+            auto& rm = obj.cast<RenderableMesh&>();
+            return py::array_t<float>(
+                {rm.vertices.size()},        // Shape
+                {sizeof(float)},             // Stride (1 float)
+                rm.vertices.data(),          // Direct pointer to C++ memory
+                obj                          // Tie lifetime to this object
+            );
         });
 
     // ── BiomeType ──────────────────────────────────────────────────────────
