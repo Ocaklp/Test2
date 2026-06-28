@@ -1,0 +1,232 @@
+Cílem práce je návrh a implementace algoritmu pro procedurální generování 3D voxelového světa, který kombinuje šumové funkce (Simplex noise) s algoritmem Wave Function Collapse (WFC). Šumové funkce slouží k tvorbě základního terénu, zatímco WFC zajišťuje koherentní rozmístění a přechody mezi různými typy prostředí (biomy). Výsledkem je systém schopný generovat věrohodné a rozmanité voxelové krajiny.
+
+---
+
+POPIS ALGORITMU
+===============
+
+Algoritmus pracuje ve dvou vzájemně provázaných vrstvách: šumová vrstva formuje
+fyzický tvar terénu, WFC vrstva rozhoduje o jeho biomatickém charakteru.
+
+
+1. SIMPLEX NOISE – tvar terénu
+-------------------------------
+
+Používá se implementace OpenSimplex2 (3D) s permutační tabulkou (512 hodnot)
+inicializovanou ze seedu. Na jejím základě jsou odvozeny tři nezávislé instance
+šumu se stejným seedem, ale rozdílným kontextem použití:
+
+a) Výšková mapa (height_noise)
+   - Fractal Brownian Motion (FBM) se 6 oktávami, persistence 0,5, lacunarity 2,0
+   - Vzorkovací frekvence: surface_scale = 0,008 (tj. pomalá, velkorozměrná vlna)
+   - Výsledek: height = fbm2(x, z) * 20 + 10  →  základní výška terénu v Y
+   - Na vrcholcích se přidává ridged noise pro ostrý horský profil
+
+b) Hustota jeskyní (cave_noise)
+   - 3D FBM vzorkovaný frekvencí cave_scale = 0,05
+   - Pokud fbm3(x, y, z) > 0,3, voxel je vzduch (jeskyně)
+   - Tím vznikají podpovrchové dutiny bez nutnosti speciálního grafu
+
+c) Biomová mapa (biome_noise)
+   - 2D šum s frekvencí biome_scale = 0,003 (velmi pomalý)
+   - Interpretuje se jako teplota × vlhkost → předběžná kategorizace biolu
+   - Výsledek slouží jako vstup / seed pro WFC krok (viz níže)
+
+
+2. WAVE FUNCTION COLLAPSE – přechody mezi biomy
+------------------------------------------------
+
+WFC pracuje na 2D mřížce buněk, kde každá buňka reprezentuje sloupec světa
+(x, z). Každá buňka může být obsazena jedním z 8 biomů:
+  Ocean, Beach, Plains, Forest, Desert, Tundra, Mountain, Snow
+
+Inicializace:
+  - Každá buňka začíná se všemi 8 možnostmi (bitset<8>).
+  - Buňky, kde šum vrátí extrémní hodnoty (hluboko pod mořem → Ocean,
+    vysoký horský vrchol → Snow), se "přišpendlí" metodou pin() na konkrétní
+    biom ještě před spuštěním solveru.
+
+Pravidla sousednosti (AdjacencyMatrix):
+  - Každý biom může sousedit sám se sebou.
+  - Geograficky realistické přechody jsou povoleny, ostré skoky zakázány:
+      Ocean ↔ Beach
+      Beach ↔ Plains, Desert, Tundra
+      Plains ↔ Forest, Desert, Mountain
+      Forest ↔ Mountain, Tundra
+      Mountain ↔ Snow
+      ... (symetrická matice 8×8 bitsetů)
+
+Průběh solveru (iteruje do vyřešení nebo max_restarts pokusů):
+  1. Najdi buňku s nejnižší entropií (nejméně zbývajících možností) – minimum
+     entropy heuristic.
+  2. Kolaps: vyber náhodný biom z povolených možností (vážená volba pomocí
+     mt19937_64 seedovaného globálním seedem světa).
+  3. Propagace: BFS od zkolapsované buňky; pro každého souseda odstraň
+     z jeho bitset možnosti, které porušují pravidlo sousednosti.
+     Pokud sousedova množina možností klesne na 0 → kontradikce, restart.
+  4. Opakuj, dokud nejsou všechny buňky zkolapsovány.
+
+Výsledkem je 2D biomová mapa bez ostrých přechodů a bez izolovaných "ostrovů"
+nekompatibilních biomů.
+
+
+3. PROPOJENÍ OBOU VRSTEV
+-------------------------
+
+Jádrem celého systému je způsob, jakým jsou šumová vrstva a WFC vrstva
+vzájemně provázány. Propojení probíhá ve třech fázích: příprava vstupů pro
+WFC ze šumu, spuštění solveru a zpětné promítnutí výsledků WFC do voxelů.
+
+
+3.1 Fáze 1 – Šum jako vstup pro WFC (pinning)
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  Před spuštěním WFC solveru se ze šumových dat odvozují tzv. pevné buňky
+  (pinned cells). Pro každou buňku (cx, cz) WFC mřížky se vypočítá:
+
+    h = surface_height(wx, wz)   ... výška terénu z FBM + ridged noise
+
+  Na základě hodnoty h se buňka metodou pin(cx, cz, biom) zafixuje na
+  konkrétní biom ještě předtím, než solver cokoli rozhodne:
+
+    h < sea_level (=8)              → pin → Ocean
+    h >= snow_level (=24)           → pin → Snow
+    sea_level ≤ h < sea_level + 2   → pin → Beach
+
+  Tím šum zajistí, že WFC solver nemůže umístit např. louku doprostřed
+  oceánu nebo les na sněhový vrchol – tvarová data z šumu omezují prostor
+  řešení WFC ještě před prvním krokem solveru.
+
+  Kromě výškových prahů slouží biomová šumová mapa (biome_noise) jako
+  přibližný "teplota × vlhkost" ukazatel. Z dvojice hodnot:
+
+    temp     = fbm2((wx+1000)·biome_scale, (wz+1000)·biome_scale, 4)
+    moisture = fbm2(wx·biome_scale, wz·biome_scale, 4)
+
+  se pro střední výšky (mezi Beach a Mountain) odvodí předběžná kategorie
+  bionu (Plains / Forest / Desert / Tundra). Tyto předběžné hodnoty mohou
+  být použity jako doplňkové piny nebo váhy při kolapsování WFC buněk,
+  čímž se kontinentální charakter šumu promítne do rozmístění biomů.
+
+
+3.2 Fáze 2 – Spuštění WFC solveru
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  WFCSolver::solve() iteruje nad 2D mřížkou (rozměr odpovídá pokrytí
+  viditelných chunků ve světovém prostoru):
+
+    1. Najdi buňku s nejnižší entropií (minimum-entropy heuristic):
+         min_entropy_cell() prochází všechny nezkolapsované buňky a vrátí
+         tu s nejmenším počtem zbývajících možností (bitset<8>.count()).
+
+    2. Kolaps (collapse(idx)):
+         Z povolených možností se vybere jedna náhodně pomocí
+         std::uniform_int_distribution seedovaného globálním seedem světa.
+         Buňka se zafixuje – options.reset(), options.set(chosen), tile = chosen.
+
+    3. Propagace (propagate(idx)) – BFS šíření omezení:
+         Pro každého ze 4 sousedů (±x, ±z) se vypočítá množina
+         povolených sousedních biomů jako sjednocení adj[st] pro každý
+         aktivní tile st ve zdrojové buňce:
+
+           allowed = ∪ { adj[st] | src.options.test(st) }
+           new_opts = nb.options & allowed
+
+         Pokud new_opts ≠ nb.options, sousedova množina se zúží a soused
+         se přidá do fronty (cascade). Pokud new_opts = ∅, nastala
+         kontradikce → celá mřížka se resetuje a solver restartuje
+         (max_restarts = 10 pokusů). Po vyčerpání restartů se zbývající
+         buňky vyplní Plains jako záchranný stav (fallback).
+
+    4. Opakuj kroky 1–3, dokud idx == -1 (všechny buňky jsou zkolapsovány).
+
+  Výstupem je kompletní 2D mřížka biomů, kde sousední buňky splňují
+  pravidla AdjacencyMatrix a zároveň respektují výškové piny ze šumu.
+
+
+3.3 Fáze 3 – Generování voxelů (TerrainGenerator::generate + apply_to_chunk)
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  Generování probíhá chunk po chunku. Pro každý sloupec (lx, lz) v chunku
+  se provede následující sekvence:
+
+  a) Výpočet výšky sloupce:
+       wx = chunk_origin.x + lx
+       wz = chunk_origin.z + lz
+       surf_h = surface_height(wx, wz)
+         = (fbm * 0.6 + ridged * 0.4) × height_amp + height_base
+         ≈ hodnota v rozsahu [height_base - height_amp, height_base + height_amp]
+           tedy přibližně [−10, 30] voxelů za výchozích parametrů
+
+  b) Průchod voxely sloupce (ly = 0 … Chunk::SIZE−1):
+       wy = chunk_origin.y + ly
+
+       Pokud wy > surf_h:
+         → vzduch (solid = false, biome = Air)
+
+       Pokud wy ≤ surf_h − 2 A cave_density > cave_threshold:
+         cave_density = fbm3(wx, wy, wz) vzorkovaný cave_scale = 0.05
+         → jeskyně (solid = false)
+         Podmínka wy < surf_h − 2 zabraňuje proražení stropu jeskyně
+         přímo na povrch – zachovává celistvou povrchovou vrstvu.
+
+       Jinak:
+         → plný voxel (solid = true)
+         biome = biome_at(wx, wz, wy)  ... předběžné přiřazení ze šumu
+
+  c) Zpětné promítnutí WFC výsledků (WFCSolver::apply_to_chunk):
+       Po dokončení kroků (a)+(b) se zavolá apply_to_chunk(), která
+       pro každý sloupec (lx, lz) vyhledá odpovídající WFC buňku:
+
+         wfc_cx = (chunk_cx − wfc_origin_cx) × Chunk::SIZE + lx
+         wfc_cz = (chunk_cz − wfc_origin_cz) × Chunk::SIZE + lz
+         b = at(wfc_cx, wfc_cz)   ... biom z WFC mřížky
+
+       Poté projde sloupec shora dolů a každému solid voxelu přepíše
+       atribut biome hodnotou b. Vzduchové a jeskynní voxely se přeskočí.
+
+  Výsledkem je terén, kde:
+    - Tvar (výška, jeskyně, převisy) je plně určen šumovými funkcemi.
+    - Materiální charakter (biom každého solid voxelu) je plně určen WFC.
+    - Konzistence přechodů je zaručena kombinací pinningu (šum → WFC)
+      a arc-consistency propagace (WFC → WFC), nikoli ruční edicí.
+
+
+3.4 Datový model voxelu a role biomů
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  Každý voxel (třída Voxel) nese dva atributy:
+    - solid : bool          – zda voxel vyplňuje prostor (true) nebo jde o vzduch
+    - biome : BiomeType     – typ prostředí (Ocean, Beach, Plains, …, Snow, Air)
+
+  Šumová fáze nastaví oba atributy. WFC fáze (apply_to_chunk) přepíše
+  pouze atribut biome u solid voxelů – atribut solid zůstává beze změny.
+  Díky tomu jsou obě vrstvy volně odděleny a každou lze ladit nezávisle.
+
+
+4. SHRNUTÍ TOKU DAT
+--------------------
+
+  seed
+   │
+   ├─► Noise(seed ^ 0)          ──► FBM+ridged height map  ──► surf_h per (x,z)  ─┐
+   │                                                                               │
+   ├─► Noise(seed ^ DEADBEEF)   ──► 3D FBM cave density    ──► is_cave per voxel  │
+   │                                                                               │
+   ├─► Noise(seed ^ CAFEBABE)   ──► 2D FBM temp+moisture   ──► preliminary biome  │
+   │                                      │                        │               │
+   │                                      │              height thresholds         │
+   │                                      ▼                        ▼               │
+   │                              biome hint map     ──► pin(cx,cz,biome)          │
+   │                                                         │                     │
+   └─► WFCSolver(seed) ◄── AdjacencyMatrix ◄────────────────┘                     │
+            │                                                                      │
+            └──► solve()                                                           │
+                  │   min-entropy collapse → BFS propagate → (restart on conflict) │
+                  ▼                                                                │
+            biome grid [width × height]                                            │
+                  │                                                                │
+                  └──► apply_to_chunk()  ─────────────────────────────────────────┘
+                              │
+                              ▼
+                    Chunk: solid flag (noise) + biome (WFC)

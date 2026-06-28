@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+build_test/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.pyd
+*.dll
+
+# CMake generated files (keep source-level CMakeLists.txt but ignore build dir)
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+
+# Compiled Python extension placed in python/ by CMake POST_BUILD
+python/voxel_engine*.so
+python/voxel_engine*.pyd
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# pytest cache
+.pytest_cache/
