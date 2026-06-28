@@ -156,7 +156,8 @@ in float vBiome;
 in float vAO;
 in float vDist;
 
-uniform vec3 uBiomeColours[9];
+//uniform vec3 uBiomeColours[9];
+uniform sampler2DArray uBlockTextures;
 uniform vec3 uLightDir;
 
 uniform vec3 uCameraPos;
@@ -171,9 +172,6 @@ const float FOG_DENSITY = 0.0012; // Lower = further visibility
 void main() {
 
     if (uIsMacro > 0.5) {
-        float distX = abs(vWorldPos.x - uCameraPos.x);
-        float distZ = abs(vWorldPos.z - uCameraPos.z);
-        
         // Small 0.5 buffer prevents Z-fighting at the boundary
         float dist = length(vec2(vWorldPos.x - uCameraPos.x, vWorldPos.z - uCameraPos.z));
         if (dist < uRenderDistance - 0.5) {
@@ -181,35 +179,46 @@ void main() {
         }
     }
 
-    // 1. Base Color
-    int biome_idx = int(vBiome + 0.5);
-    vec3 baseColor = uBiomeColours[clamp(biome_idx, 0, 8)];
+// --- TRIPLANAR TEXTURE MAPPING ---
+    int texIndex = int(vBiome + 0.5); 
 
-    // 2. Lighting (Warm sunlight + cool ambient sky reflection)
+    // Calculate blending weights based on the absolute normal vector
+    vec3 blendWeights = abs(vNormal);
+    // Force weights to sum to 1.0 to ensure consistent brightness
+    blendWeights = blendWeights / (blendWeights.x + blendWeights.y + blendWeights.z);
+
+    // Scale controls how many world-units a texture covers (1.0 = 1 block)
+    float texScale = 1.0 / 8.0;
+
+    // Sample the texture array from the 3 orthogonal planes
+    vec4 texColorX = texture(uBlockTextures, vec3(vWorldPos.yz * texScale, texIndex));
+    vec4 texColorY = texture(uBlockTextures, vec3(vWorldPos.xz * texScale, texIndex));
+    vec4 texColorZ = texture(uBlockTextures, vec3(vWorldPos.xy * texScale, texIndex));
+
+    // Blend the samples together
+    vec3 baseColor = (texColorX * blendWeights.x + 
+                      texColorY * blendWeights.y + 
+                      texColorZ * blendWeights.z).rgb;
+    // ---------------------------------
+
+    // 2. Lighting
     vec3 normal = normalize(vNormal);
     vec3 lightDir = normalize(uLightDir);
     float diff = max(dot(normal, lightDir), 0.0);
     
-    vec3 sunLight = vec3(1.1, 1.0, 0.85) * diff; // Warm sun
-    vec3 ambientLight = vec3(0.35, 0.45, 0.6);   // Sky ambient
-    
-    // Macro chunks provide AO. Detail chunks will receive a default of 1.0 from Python.
+    vec3 sunLight = vec3(1.1, 1.0, 0.85) * diff;
+    vec3 ambientLight = vec3(0.35, 0.45, 0.6);
     float aoFactor = 0.35 + (vAO * 0.65);
     
     vec3 finalColor = baseColor * (sunLight + ambientLight) * aoFactor;
 
-    // 3. Atmospheric Scattering (Exponential Distance Fog)
+    // 3. Fog & Atmospheric Scattering
     float fogFactor = 1.0 - exp(-pow(vDist * FOG_DENSITY, 2.0));
     fogFactor = clamp(fogFactor, 0.0, 1.0);
-    
-    // 4. Height Fog (Makes valleys look misty and massive)
     float heightFog = exp(-max(vWorldPos.y - 25.0, 0.0) * 0.015);
     vec3 horizonFogColor = mix(vec3(0.75, 0.85, 0.95), FOG_COLOR, heightFog);
-
-    // Apply fog
+    
     finalColor = mix(finalColor, horizonFogColor, fogFactor);
-
-    // 5. Subtle Gamma Correction for richer colors
     finalColor = pow(finalColor, vec3(1.0 / 1.4));
 
     FragColor = vec4(finalColor, 1.0);
@@ -307,14 +316,26 @@ class VoxelRenderer:
 
         # Upload palette to shader.
         gl.glUseProgram(self._shader)
-        palette = []
-        for i in range(9):
-            c = BIOME_COLOURS.get(i, (1.0, 0.0, 1.0))
-            palette.extend(c)
-        gl.glUniform3fv(self._u_biome, 9,
-                        np.array(palette, dtype=np.float32))
-        gl.glUniform3f(self._u_light, 0.6, 1.0, 0.4)
+        texture_files = [
+            None,                       # 0 = Air
+            "Textures/water.png",       # 1 = Ocean
+            "Textures/sand.png",        # 2 = Beach
+            "Textures/grass_top.png",   # 3 = Plains
+            "Textures/dirt.png",        # 4 = Forest
+            "Textures/sand.png",        # 5 = Desert
+            "Textures/stone.png",      # 6 = Tundra
+            "Textures/gravel.png",       # 7 = Mountain
+            "Textures/snow.png"         # 8 = Snow
+        ]
+        self._block_texture_array = self.load_texture_array(texture_files, tex_size=16)
+        gl.glUseProgram(self._shader)
+        u_textures = gl.glGetUniformLocation(self._shader, "uBlockTextures")
+        gl.glUniform1i(u_textures, 1)  # Texture Unit 1
 
+        # --- THE MISSING SUN ---
+        # Fetch the uniform location and set the light direction again
+        self._u_light = gl.glGetUniformLocation(self._shader, "uLightDir")
+        gl.glUniform3f(self._u_light, 0.6, 1.0, 0.4)
         # Per-chunk GPU buffers: (cx,cy,cz) → (vao, vbo, vertex_count)
         self._buffers: Dict[Tuple[int,int,int], Tuple[int,int,int]] = {}
         # NOVÉ: Paměť pro Macro-Chunky
@@ -396,6 +417,46 @@ class VoxelRenderer:
         gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
 
         return texture_id
+    
+    def load_texture_array(self, image_paths: list[str], tex_size: int = 16) -> int:
+        """Loads a list of images into a GL_TEXTURE_2D_ARRAY."""
+        tex_array_id = gl.glGenTextures(1)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex_array_id)
+
+        # Allocate storage for the texture array
+        layer_count = len(image_paths)
+        gl.glTexImage3D(
+            gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, 
+            tex_size, tex_size, layer_count, 
+            0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None
+        )
+
+        # Upload each texture into its respective layer
+        for i, img_path in enumerate(image_paths):
+            if not img_path:  # Skip Air or empty indices
+                continue
+            
+            img = pygame.image.load(img_path).convert_alpha()
+            # Ensure images are scaled to uniform size (e.g. 16x16)
+            if img.get_size() != (tex_size, tex_size):
+                img = pygame.transform.scale(img, (tex_size, tex_size))
+                
+            img_data = pygame.image.tostring(img, "RGBA", True)
+            gl.glTexSubImage3D(
+                gl.GL_TEXTURE_2D_ARRAY, 0, 
+                0, 0, i,  # xoffset, yoffset, zoffset (layer i)
+                tex_size, tex_size, 1, 
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img_data
+            )
+
+        # Set texture parameters (NEAREST filter for that blocky voxel look)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        
+        return tex_array_id
 
     # ── Mesh management ────────────────────────────────────────────────────
 
@@ -518,6 +579,10 @@ class VoxelRenderer:
         
         chunk_size = 32.0
         gl.glUniform1f(self._u_render_dist, (self._view_distance * chunk_size) - 2.0)
+
+        # NEW: Bind the texture array to texture unit 1
+        gl.glActiveTexture(gl.GL_TEXTURE1)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._block_texture_array)
 
         # Cache PyOpenGL functions locally for speed
         bind_vao = gl.glBindVertexArray
