@@ -31,30 +31,10 @@ int Chunk::solid_count() const {
 
 namespace {
 
-// Normals for the 6 face directions (+X, -X, +Y, -Y, +Z, -Z).
-static const float NORMS[6][3] = {
-    { 1, 0, 0}, {-1, 0, 0},
-    { 0, 1, 0}, { 0,-1, 0},
-    { 0, 0, 1}, { 0, 0,-1}
-};
-
-// Axes: for face direction d, u and v are the two tangent axes.
-//   d=0,1 (±X): u=Y, v=Z
-//   d=2,3 (±Y): u=X, v=Z
-//   d=4,5 (±Z): u=X, v=Y
-static const int AXIS_MAP[6][3] = {
-    {0,1,2},{0,1,2},  // ±X: face_axis=0, u=1, v=2
-    {1,0,2},{1,0,2},  // ±Y: face_axis=1, u=0, v=2
-    {2,0,1},{2,0,1}   // ±Z: face_axis=2, u=0, v=1
-};
-static const bool FLIP[6] = {false, true, true, false, false, true};
-
-
 inline void push_quad(std::vector<float>& out,
                       float p[4][3], float nx, float ny, float nz, float biome) {
     // Two triangles: 0-1-2 and 0-2-3
-    const int tri[6] = {0,1,2, 0,2,3};
-    for (int i : tri) {
+    for (int i : config::QUAD_TRIANGLES) {
         out.push_back(p[i][0]); out.push_back(p[i][1]); out.push_back(p[i][2]);
         out.push_back(nx); out.push_back(ny); out.push_back(nz);
         out.push_back(biome);
@@ -72,12 +52,12 @@ std::vector<float> Chunk::build_mesh(
 
     // For each of the 6 face directions:
     for (int d = 0; d < 6; ++d) {
-        int fa = AXIS_MAP[d][0];  // face axis index
-        int ua = AXIS_MAP[d][1];  // u axis index
-        int va = AXIS_MAP[d][2];  // v axis index
+        int fa = config::AXIS_MAP[d][0];  // face axis index
+        int ua = config::AXIS_MAP[d][1];  // u axis index
+        int va = config::AXIS_MAP[d][2];  // v axis index
         int sign = (d % 2 == 0) ? 1 : -1;  // +1 for positive faces
 
-        float nx = NORMS[d][0], ny = NORMS[d][1], nz = NORMS[d][2];
+        float nx = config::NORMS[d][0], ny = config::NORMS[d][1], nz = config::NORMS[d][2];
 
         // Sweep along face axis
         for (int layer = 0; layer < SIZE; ++layer) {
@@ -157,7 +137,7 @@ std::vector<float> Chunk::build_mesh(
                     std::copy(abc2, abc2+3, pts[2]);
                     std::copy(abc3, abc3+3, pts[3]);
 
-                    if (FLIP[d]) std::swap(pts[1], pts[3]);
+                    if (config::FLIP[d]) std::swap(pts[1], pts[3]);
                     push_quad(out, pts, nx, ny, nz, static_cast<float>(biome));
 
                     // Clear mask region

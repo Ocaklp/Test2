@@ -1,3 +1,4 @@
+#include "config.hpp"
 #include "terrain.hpp"
 #include <algorithm>
 #include <array>
@@ -10,37 +11,22 @@ namespace voxel {
 
 namespace {
 
-constexpr float kTemperatureOffset = 16384.0f;
-constexpr float kMoistureOffset = 32768.0f;
-constexpr float kContinentalOffset = 8192.0f;
-constexpr float kContinentalScale = 0.8f;
-constexpr float kPeakOffsetX = 1337.0f;
-constexpr float kPeakOffsetZ = 7331.0f;
-constexpr float kBiomeBlendSharpness = 2.25f;
-constexpr float kTransitionScale = 0.025f;
-constexpr float kTransitionAmp   = 2.5f;
-constexpr int   kUpsampleStride  = 4;
-constexpr int   kUpsampleGridSize = (Chunk::SIZE / kUpsampleStride) + 1;
-constexpr size_t kUpsampleGridArea =
-    static_cast<size_t>(kUpsampleGridSize) * static_cast<size_t>(kUpsampleGridSize);
+constexpr float kTemperatureOffset = config::TEMPERATURE_OFFSET;
+constexpr float kMoistureOffset = config::MOISTURE_OFFSET;
+constexpr float kContinentalOffset = config::CONTINENTAL_OFFSET;
+constexpr float kContinentalScale = config::CONTINENTAL_SCALE;
+constexpr float kPeakOffsetX = config::PEAK_OFFSET_X;
+constexpr float kPeakOffsetZ = config::PEAK_OFFSET_Z;
+constexpr float kBiomeBlendSharpness = config::BIOME_BLEND_SHARPNESS;
+constexpr float kTransitionScale = config::TRANSITION_SCALE;
+constexpr float kTransitionAmp   = config::TRANSITION_AMP;
+constexpr int   kUpsampleStride  = config::UPSAMPLE_STRIDE;
+constexpr int   kUpsampleGridSize = config::UPSAMPLE_GRID_SIZE;
+constexpr size_t kUpsampleGridArea = config::UPSAMPLE_GRID_AREA;
 
 // Keep compatibility with legacy TerrainParams amplitude/base interpretation.
-constexpr float kLegacyHeightAmp = 20.0f;
-constexpr float kLegacyHeightBase = 10.0f;
-
-struct BiomeProfile {
-    BiomeType biome;
-    float target_temp;
-    float target_moisture;
-    float continental_bias;
-    float min_height;
-    float max_height;
-    int   peak_layers;
-    float peak_frequency;
-    float peak_height;
-    float ridge_weight;
-    float detail_weight;
-};
+constexpr float kLegacyHeightAmp = config::LEGACY_HEIGHT_AMP;
+constexpr float kLegacyHeightBase = config::LEGACY_HEIGHT_BASE;
 
 struct ClimateSample {
     float temperature;
@@ -83,28 +69,14 @@ inline float bilerp(const std::array<float, kUpsampleGridArea>& grid,
     return vx0 + (vx1 - vx0) * tz;
 }
 
-// Centralized biome configuration. Add/adjust biome behavior here.
-constexpr std::array<BiomeProfile, 5> kBiomeProfiles{{
-    // Plains: mostly flat and low variation.
-    {BiomeType::Plains,   0.05f,  0.05f, -0.15f, -20.0f, 23.0f, 0, 0.4f, 0.0f, 0.15f, 0.10f},
-    // Forest: moderate hills.
-    {BiomeType::Forest,   0.10f,  0.50f,  0.00f, 20.0f, 33.0f, 2, 0.6f, 5.0f, 0.30f, 0.14f},
-    // Desert: broad, smoother dunes.
-    {BiomeType::Desert,   0.70f, -0.55f, -0.05f, 0.0f, 27.0f, 1, 1.1f, 2.8f, 0.14f, 0.11f},
-    // Tundra: colder rough plateaus.
-    {BiomeType::Tundra,  -0.70f, -0.10f,  0.05f, 30.0f, 38.0f, 2, 1.8f, 6.0f, 0.34f, 0.14f},
-    // Mountain: one broad dominant peak rather than scattered spikes.
-    {BiomeType::Mountain, 0.10f, -0.15f,  0.80f, 98.0f, 98.0f, 1, 0.40f, 300.0f, 0.62f, 0.18f},
-}};
-
-const BiomeProfile& profile_for(BiomeType biome) {
+const config::BiomeProfile& profile_for(BiomeType biome) {
     switch (biome) {
-        case BiomeType::Plains:   return kBiomeProfiles[0];
-        case BiomeType::Forest:   return kBiomeProfiles[1];
-        case BiomeType::Desert:   return kBiomeProfiles[2];
-        case BiomeType::Tundra:   return kBiomeProfiles[3];
-        case BiomeType::Mountain: return kBiomeProfiles[4];
-        default:                  return kBiomeProfiles[0];
+        case BiomeType::Plains:   return config::BIOME_PROFILES[0];
+        case BiomeType::Forest:   return config::BIOME_PROFILES[1];
+        case BiomeType::Desert:   return config::BIOME_PROFILES[2];
+        case BiomeType::Tundra:   return config::BIOME_PROFILES[3];
+        case BiomeType::Mountain: return config::BIOME_PROFILES[4];
+        default:                  return config::BIOME_PROFILES[0];
     }
 }
 
@@ -112,7 +84,7 @@ ClimateSample sample_climate(const TerrainParams& params,
                              const Noise& biome_noise,
                              const Noise& height_noise,
                              float wx, float wz) {
-    constexpr float kBiomeScaleMultiplier = 0.35f;
+    constexpr float kBiomeScaleMultiplier = config::DEFAULT_BIOME_SCALE_MULTIPLIER;
     float s = params.biome_scale * kBiomeScaleMultiplier;
     float moisture = biome_noise.fbm2((wx + kMoistureOffset) * s, (wz + kMoistureOffset) * s, 2);
     float temp = biome_noise.fbm2((wx + kTemperatureOffset) * s, (wz + kTemperatureOffset) * s, 2);
@@ -126,18 +98,18 @@ ClimateSample sample_climate(const TerrainParams& params,
 TerrainGenerator::TerrainGenerator(uint64_t seed, const TerrainParams& params)
     : seed_(seed), params_(params),
       height_noise_(seed),
-      biome_noise_(seed ^ 0xCAFEBABE87654321ULL) {}
+      biome_noise_(seed ^ config::BIOME_SEED_MODIFIER) {}
 
 BiomeType TerrainGenerator::macro_biome_at(float wx, float wz) const {
     ClimateSample climate = sample_climate(params_, biome_noise_, height_noise_, wx, wz);
 
-    const BiomeProfile* best = &kBiomeProfiles.front();
+    const config::BiomeProfile* best = &config::BIOME_PROFILES.front();
     float best_score = -(
         std::abs(climate.temperature - best->target_temp) +
         std::abs(climate.moisture - best->target_moisture)
     ) + climate.continentalness * best->continental_bias;
-    for (size_t i = 1; i < kBiomeProfiles.size(); ++i) {
-        const auto& profile = kBiomeProfiles[i];
+    for (size_t i = 1; i < config::BIOME_PROFILES.size(); ++i) {
+        const auto& profile = config::BIOME_PROFILES[i];
         float climate_dist = std::abs(climate.temperature - profile.target_temp) +
                              std::abs(climate.moisture - profile.target_moisture);
         float score = -climate_dist + climate.continentalness * profile.continental_bias;
@@ -187,10 +159,10 @@ float TerrainGenerator::biome_surface_height(BiomeType biome, float wx, float wz
 float TerrainGenerator::surface_height(float wx, float wz) const {
     ClimateSample climate = sample_climate(params_, biome_noise_, height_noise_, wx, wz);
 
-    std::array<float, kBiomeProfiles.size()> raw_scores{};
+    std::array<float, config::BIOME_PROFILES.size()> raw_scores{};
     float max_score = -std::numeric_limits<float>::infinity();
-    for (size_t i = 0; i < kBiomeProfiles.size(); ++i) {
-        const auto& profile = kBiomeProfiles[i];
+    for (size_t i = 0; i < config::BIOME_PROFILES.size(); ++i) {
+        const auto& profile = config::BIOME_PROFILES[i];
         float climate_dist = std::abs(climate.temperature - profile.target_temp) +
                              std::abs(climate.moisture - profile.target_moisture);
         float score = -climate_dist + climate.continentalness * profile.continental_bias;
@@ -200,10 +172,10 @@ float TerrainGenerator::surface_height(float wx, float wz) const {
 
     float weight_sum = 0.0f;
     float blended_height = 0.0f;
-    for (size_t i = 0; i < kBiomeProfiles.size(); ++i) {
+    for (size_t i = 0; i < config::BIOME_PROFILES.size(); ++i) {
         // Softmax-like weighting; subtracting max_score keeps exp() numerically stable.
         float w = std::exp((raw_scores[i] - max_score) * kBiomeBlendSharpness);
-        blended_height += w * biome_surface_height(kBiomeProfiles[i].biome, wx, wz);
+        blended_height += w * biome_surface_height(config::BIOME_PROFILES[i].biome, wx, wz);
         weight_sum += w;
     }
 

@@ -1,3 +1,4 @@
+#include "config.hpp"
 #include "world.hpp"
 #include <iostream>
 #include <algorithm>
@@ -32,8 +33,8 @@ World::~World() {
 void World::build_macro_mesh(int rx, int rz) {
     std::vector<float> mesh;
     
-    constexpr int step = 16; 
-    constexpr int macro_size = 256;
+    constexpr int step = config::MACRO_MESH_STEP;
+    constexpr int macro_size = config::MACRO_CHUNK_SIZE;
     float start_x = static_cast<float>(rx * macro_size);
     float start_z = static_cast<float>(rz * macro_size);
 
@@ -142,9 +143,9 @@ std::vector<std::tuple<int, int, int>> World::get_visible_coordinates(
     std::vector<std::tuple<int, int, int>> result;
     std::lock_guard<std::mutex> lock(chunks_mutex_);
 
-    float fov_rad = fov * (3.14159265f / 180.0f);
-    float cos_limit = std::cos((fov_rad * 0.5f) * 2.2f);
-    const float chunk_size = 32.0f; // Adjust to your Chunk::SIZE
+    float fov_rad = fov * (config::DEG_TO_RAD);
+    float cos_limit = std::cos((fov_rad * 0.5f) * config::FOV_EXPANSION_FACTOR);
+    const float chunk_size = config::CHUNK_SIZE; // Adjust to your Chunk::SIZE
 
     for (const auto& [key, entry] : chunks_) {
         // Skip unmeshed chunks
@@ -164,7 +165,7 @@ std::vector<std::tuple<int, int, int>> World::get_visible_coordinates(
                         (to_y / dist) * dir_y + 
                         (to_z / dist) * dir_z;
             
-            if (dot < cos_limit && dist > chunk_size * 1.5f) {
+            if (dot < cos_limit && dist > chunk_size * config::FRUSTUM_CULL_BUFFER) {
                 continue; // Behind camera / outside FOV
             }
         }
@@ -185,11 +186,11 @@ std::vector<RenderableMesh> World::get_visible_meshes(
     std::lock_guard<std::mutex> lock(chunks_mutex_);
 
     // Convert FOV to radians and apply the 2.2 expansion factor from your render.py
-    float fov_rad = fov * (3.14159265f / 180.0f);
-    float cos_limit = std::cos((fov_rad * 0.5f) * 2.2f);
+    float fov_rad = fov * (config::DEG_TO_RAD);
+    float cos_limit = std::cos((fov_rad * 0.5f) * config::FOV_EXPANSION_FACTOR);
     
     // Assuming Chunk::SIZE is 32 based on your python code
-    const float chunk_size = 32.0f; 
+    const float chunk_size = config::CHUNK_SIZE; 
 
     for (const auto& [key, entry] : chunks_) {
         // Skip chunks that haven't been meshed yet
@@ -214,7 +215,7 @@ std::vector<RenderableMesh> World::get_visible_meshes(
                         (to_z / dist) * dir_z;
             
             // If it's outside the FOV and not immediately surrounding the player, cull it
-            if (dot < cos_limit && dist > chunk_size * 1.5f) {
+            if (dot < cos_limit && dist > chunk_size * config::FRUSTUM_CULL_BUFFER) {
                 continue; 
             }
         }
@@ -292,7 +293,7 @@ void World::schedule_missing_chunks(const Vec3& vp) {
                 if (dx * dx + dz * dz > vd_squared) {
                     continue;  // circular horizontal load radius
                 }
-                for (int dy = -2; dy <= 2; ++dy) {  // limited vertical range
+                for (int dy = config::CHUNK_LOAD_Y_MIN; dy <= config::CHUNK_LOAD_Y_MAX; ++dy) {  // limited vertical range
                     ChunkKey key{vcx + dx, vcy + dy, vcz + dz};
                     auto it = chunks_.find(key);
                     if (it == chunks_.end()) {
@@ -319,7 +320,7 @@ void World::schedule_missing_chunks(const Vec3& vp) {
 }
 
 void World::unload_distant_chunks(const Vec3& vp) {
-    constexpr float kMaxVerticalChunkDelta = 3.0f;
+    constexpr float kMaxVerticalChunkDelta = config::MAX_VERTICAL_CHUNK_DELTA;
     float vcx = vp.x / Chunk::SIZE;
     float vcy = vp.y / Chunk::SIZE;
     float vcz = vp.z / Chunk::SIZE;
@@ -563,11 +564,11 @@ Voxel World::get_voxel(int wx, int wy, int wz) const {
 
 void World::schedule_missing_macros(const Vec3& vp) {
     // Velikost Macro-Chunku je 256 bloků
-    int vrx = static_cast<int>(std::floor(vp.x / 256.0f));
-    int vrz = static_cast<int>(std::floor(vp.z / 256.0f));
-    
+    int vrx = static_cast<int>(std::floor(vp.x / static_cast<float>(config::MACRO_CHUNK_SIZE)));
+    int vrz = static_cast<int>(std::floor(vp.z / static_cast<float>(config::MACRO_CHUNK_SIZE)));
+
     // Poloměr 5 znamená 5 * 256 = 1280 bloků na každou stranu!
-    int macro_radius = 5; 
+    int macro_radius = config::MACRO_RADIUS; 
 
     struct MissingMacro { MacroKey key; int dist2; };
     std::vector<MissingMacro> missing;

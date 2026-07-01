@@ -1,4 +1,5 @@
 #pragma once
+#include "config.hpp"
 #include "noise.hpp"
 #include "voxel.hpp"
 #include "chunk.hpp"
@@ -8,15 +9,15 @@ namespace voxel {
 
 // Parameters that control terrain shape and biome assignment.
 struct TerrainParams {
-    float surface_scale  = 0.005f;  // horizontal frequency of height noise
-    float biome_scale    = 0.0008f; // frequency of biome selection noise (lower = larger biomes)
-    int   sea_level      = 8;       // voxel Y below which Ocean is assigned
-    int   beach_height   = 2;       // ±voxels around sea_level that become Beach
-    int   snow_level     = 90;      // voxel Y above which Snow is assigned
-    int   mountain_level = 35;      // voxel Y above which Mountain is assigned
-    int   fbm_octaves    = 4;       // octaves for surface height FBM
-    float height_amp     = 28.0f;   // amplitude multiplier for height map
-    float height_base    = 14.0f;   // baseline height added to height map
+    float surface_scale  = config::DEFAULT_SURFACE_SCALE;  // horizontal frequency of height noise
+    float biome_scale    = config::DEFAULT_BIOME_SCALE; // frequency of biome selection noise (lower = larger biomes)
+    int   sea_level      = config::DEFAULT_SEA_LEVEL; // voxel Y below which Ocean is assigned
+    int   beach_height   = config::DEFAULT_BEACH_HEIGHT; // ±voxels around sea_level that become Beach
+    int   snow_level     = config::DEFAULT_SNOW_LEVEL; // voxel Y above which Snow is assigned
+    int   mountain_level = config::DEFAULT_MOUNTAIN_LEVEL; // voxel Y above which Mountain is assigned
+    int   fbm_octaves    = config::DEFAULT_FBM_OCTAVES;       // octaves for surface height FBM
+    float height_amp     = config::DEFAULT_HEIGHT_AMP;   // amplitude multiplier for height map
+    float height_base    = config::DEFAULT_HEIGHT_BASE;   // baseline height added to height map
 };
 
 // Generates terrain inside a Chunk given world-space noise and parameters.

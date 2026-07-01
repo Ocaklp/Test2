@@ -1,4 +1,5 @@
 #pragma once
+#include "config.hpp"
 #include "voxel.hpp"
 #include <array>
 #include <cstddef>
@@ -12,13 +13,12 @@ namespace voxel {
 // Fixed-size chunk of CHUNK_SIZE³ binary voxels.
 // Voxels are stored in a flat array with Z-major (ZYX) indexing for cache locality
 // when iterating over the XY plane (horizontal slices).
-constexpr int CHUNK_SIZE = 32;  // must be a power of 2
 
 class Chunk {
 public:
-    static constexpr int SIZE   = CHUNK_SIZE;
-    static constexpr int VOLUME = SIZE * SIZE * SIZE;
-    static constexpr int SHIFT  = 5;              // log2(32)
+    static constexpr int SIZE   = config::CHUNK_SIZE;
+    static constexpr int VOLUME = config::CHUNK_VOLUME;
+    static constexpr int SHIFT  = config::CHUNK_SHIFT;         // log2(32)
 
     Chunk();
     explicit Chunk(IVec3 chunk_coord);
